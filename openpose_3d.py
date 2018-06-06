@@ -6,10 +6,11 @@ Slave thread: Call openpose on the RGB images in the current repository and save
 Then, modify these keypoints by adding the depth information. When done, remove the buffer repository.
 
 Author: Morgan Lefranc
-Date: 01/06/2018 
+Date: 01/06/2018
 """
 
 # coding: utf-8
+# pylint: disable-msg=C0103,E0611, C0411, I1101
 
 import numpy as np
 import cv2
@@ -22,47 +23,62 @@ import subprocess
 import threading
 import os
 
+import json_manip
+
 # Parameters
 N = 5
 bufferIndex = 0
 bufferFrameIndex = 0
-buffer_arrays = []
+cwd = os.getcwd()
 
 class openPoseThread(threading.Thread):
-    def __init__(self, threadID, buffer_arrays):
+    def __init__(self, threadID):
         threading.Thread.__init__(self)
         self.threadID = threadID
-        self.buffer_arrays = buffer_arrays
     
     def run(self):
-        print("Starting thread nb", self.name)
-        cwd = os.getcwd()
+        global cwd
+        print("Starting thread nb", self.threadID)
         buffer_dir = cwd + "/buffers/buffer{}".format(self.threadID)
-        os.chdir("/home/morgan/openpose")
-        subprocess.call("./build/examples/openpose/openpose.bin --image_dir {} --write_images {} --write_json {} --display 0".format(buffer_dir, buffer_dir, buffer_dir), shell=True)
-        os.chdir(cwd)
-        print("Ending thread nb", self.name)
-        
+        color_dir = buffer_dir + "/color"
+        depth_dir = buffer_dir + "/depth"
+        keypoints_dir = buffer_dir + "/keypoints"
+        # YAML save version (deprecated)
+        # subprocess.call("./build/examples/openpose/openpose.bin --image_dir {} --write_images {} --write_keypoint {} --write_keypoint_format yml --display 0".format(color_dir, color_dir, keypoints_dir), shell=True)
+
+        # JSON save version
+        subprocess.call("./build/examples/openpose/openpose.bin --image_dir {} --write_images {} --write_keypoint_json {} --display 0".format(color_dir, color_dir, keypoints_dir), shell=True)
+        json_manip.rep_to_3d(keypoints_dir, depth_dir)
+        print("Ending thread nb", self.threadID)
+
 
 
 def createBuffer():
-    global bufferIndex
-    subprocess.call(["mkdir", "buffers/buffer{}".format(bufferIndex)])
+    global bufferIndex, cwd
+    subprocess.call("mkdir {}/buffers/buffer{}".format(cwd, bufferIndex), shell=True)
+    subprocess.call("mkdir {}/buffers/buffer{}/color".format(cwd, bufferIndex), shell=True)
+    subprocess.call("mkdir {}/buffers/buffer{}/depth".format(cwd, bufferIndex), shell=True)
+    subprocess.call("mkdir {}/buffers/buffer{}/keypoints".format(cwd, bufferIndex), shell=True)
     bufferIndex += 1
 
 def deleteBuffer(i):
-    subprocess.call("rm -rf buffers/buffer{}".format(i), shell=True)
+    global cwd
+    subprocess.call("rm -rf {}/buffers/buffer{}".format(cwd, i), shell=True)
 
 
 # Remove all existing buffer repositories
-subprocess.call("rm -rf buffers/buffer*", shell=True)
+subprocess.call("rm -rf {}/buffers/buffer*".format(cwd), shell=True)
 
 # Create first buffer
 createBuffer()
 
+# Move to openpose root
+os.chdir("/home/morgan/openpose")
+
 try:
     from pylibfreenect2 import OpenCLPacketPipeline
     pipeline = OpenCLPacketPipeline()
+
 except:
     try:
         from pylibfreenect2 import OpenGLPacketPipeline
@@ -120,9 +136,10 @@ while True:
     registration.apply(color, depth, undistorted, registered, bigdepth=bigdepth, color_depth_map=color_depth_map)
 
     # cv2.imshow("ir", ir.asarray() / 65535.)
-    # cv2.imshow("depth", depth.asarray() / 4500.)
-    cv2.imshow("color", cv2.resize(color.asarray(),
-                                  (int(1920 / 3), int(1080 / 3))))
+    depth_array = depth.asarray()
+    # cv2.imshow("depth", depth_array)
+    color_array = cv2.resize(color.asarray(), (int(1920 / 3), int(1080 / 3)))
+    cv2.imshow("color", color_array)
     
     reg_array = registered.asarray(np.uint8)
     cv2.imshow("registered", reg_array)
@@ -144,16 +161,17 @@ while True:
     #     cv2.imshow("new_color_map", img4)
 
     if bufferFrameIndex < N:
-        cv2.imwrite("buffers/buffer{}/frame{}.png".format(bufferIndex - 1, bufferFrameIndex), reg_array)
-        buffer_arrays.append(reg_array)
+        # Option to write raw color images
+        # cv2.imwrite("{}/buffers/buffer{}/color/true_color{}.png".format(cwd, bufferIndex - 1, bufferFrameIndex), color_array)
+        cv2.imwrite("{}/buffers/buffer{}/color/color{}.png".format(cwd, bufferIndex - 1, bufferFrameIndex), reg_array)
+        cv2.imwrite("{}/buffers/buffer{}/depth/depth{}.png".format(cwd, bufferIndex - 1, bufferFrameIndex), depth_array / 10.)
         bufferFrameIndex += 1
     
     else:
         bufferFrameIndex = 0
-        new_thread = openPoseThread(bufferIndex, buffer_arrays)
+        new_thread = openPoseThread(bufferIndex - 1)
         new_thread.start()
         createBuffer()
-        buffer_arrays = []
         
 
 
